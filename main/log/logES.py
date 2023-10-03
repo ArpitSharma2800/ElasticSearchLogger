@@ -1,47 +1,29 @@
 from flask import request
-import threading
+from elasticsearch import Elasticsearch
+from datetime import datetime
 import time
+from celery import Celery
+from elasticsearch.exceptions import ElasticsearchException
 
+es_client = Elasticsearch(['http://localhost:9200'])
+celery = Celery(__name__, broker='redis://localhost:6379/0')
 
-class LogAPI:
+class ElasticLogger:
+    @celery.task
+    def process_log(user_id, opid, log_type, log_level, error, message):
+        index_name = f"medbud-logger-{user_id}-{int(time.time())}"
 
-    def _validate_data(self, data):
-        user_id = data.get('user_id')
-        opid = data.get('opid')
-        log_type = data.get('log_type')
-        log_level = data.get('log_level')
-        error = data.get('error')
-        message = data.get('message')
+        log_data = {
+            'user_id': user_id,
+            'opid': opid,
+            'log_type': log_type,
+            'log_level': log_level,
+            'error': error,
+            'message': message,
+            'timestamp': datetime.now()
+        }
 
-        if any(field is None for field in [user_id, opid, log_type, log_level, message]):
-            return False
-
-        allowed_log_levels = ['info', 'warning', 'error', 'verbose', 'trivia']
-        if log_level not in allowed_log_levels:
-            return False
-
-        if error is None:
-            error = ''
-
-        return True
-
-    @staticmethod
-    def post(self):
-        response_thread = threading.Thread(target=self.send_response)
-        response_thread.start()
-
-        data = request.json
-
-        if not self._validate_data(data):
-            print("checked")
-
-        user_id = data.get('user_id')
-        opid = data.get('opid')
-        log_type = data.get('log_type')
-        log_level = data.get('log_level')
-        error = data.get('error')
-        message = data.get('message')
-
-    def send_response(self):
-        time.sleep(0.1)
-        return "Log message submitted!", 200
+        try:
+            es_client.index(index=index_name, doc_type='_doc', body=log_data)
+        except ElasticsearchException as e:
+            print(f"Failed to insert log data into Elasticsearch: {str(e)}")
